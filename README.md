@@ -1,85 +1,94 @@
-# 🧠 Train SDXL Textual Inversion on AMD GPUs (ROCm) with Ubuntu
+# README - SDXL Embedding Training on Ubuntu + ROCm + RX 7900 XTX
 
-This guide documents a fully working setup for training **Textual Inversion embeddings** on **Stable Diffusion XL (SDXL 1.0)** using **AMD GPUs** via **ROCm**, tested on **Ubuntu 22.04.5 LTS** with an **RX 7900 XTX**.
-
----
-
-## 🚀 Objective
-
-Teach a custom token (e.g. `yourtoken`) to represent a visual concept using Textual Inversion on SDXL, **without using NVIDIA GPUs or Docker**.
+This document is a personal technical logbook designed to serve as both a reference and a guide for anyone wishing to understand or replicate a Textual Inversion training process using the SDXL model. Textual Inversion is a technique that allows training a custom keyword (or "token") to represent a specific visual concept or identity. SDXL is one of the latest and most powerful versions of Stable Diffusion, optimized for high-resolution image generation. This guide details the full process on a system equipped with an AMD GPU using ROCm, including all successful setups, failed attempts, workarounds, and validated configurations.
 
 ---
 
-## ⚙️ Setup Overview
+## ✅ PART 1: WORKING SETUP (START TO FINISH)
 
-- ✅ Ubuntu 22.04.5 LTS
-- ✅ ROCm 6.3.2
-- ✅ Python 3.10 (venv)
-- ✅ AMD RX 7900 XTX
-- ✅ Kohya: `bmaltais/kohya_ss` (branch: `master`)
-- 🔁 Replaced `sd-scripts/` with version from `kohya-ss/sd-scripts`
+### System Configuration
 
-⚠️ This breaks the bmaltais GUI, but everything works from CLI via `accelerate`.
+- **OS**: Ubuntu 22.04.5 LTS
+- **GPU**: AMD RX 7900 XTX
+- **Drivers**: ROCm 6.3.2
+- **Python**: 3.10 via virtual environment (venv)
+- **Kohya**: `master` branch of [bmaltais/kohya\_ss](https://github.com/bmaltais/kohya_ss), with a full replacement of the `sd-scripts/` directory by the latest version from [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts)
 
----
+⚠️ This method likely disables the graphical user interface (UI) of `bmaltais/kohya_ss`. In this setup, the GUI is not used: the repository is used solely as a base to install all required dependencies for training and monitoring.
 
-## 📁 Dataset Structure
+ℹ️ **Important note**: The `sdxl_train_textual_inversion.py` script from `bmaltais/kohya_ss` is currently broken — it **does not save the learned vectors**, either intermediate or final. Although training appears to run normally, the resulting embedding file will be empty. For this reason, the working version from `kohya-ss/sd-scripts` is used instead.
 
-```plaintext
-kohya_ss/
-└── dataset/
-    ├── images/
-    │   └── 40_yourtoken/
-    │       ├── img001.png
-    │       ├── img001.txt
-    │       └── ...
-    ├── model/
-    │   ├── config_textual_inversion.toml
-    │   └── config_resume.toml
-    ├── logs/
-    │   └── prompt.txt
-    └── outputs/
-        └── samples/
+### Environment Setup
+
+1. Install Ubuntu 22.04.5
+2. Add ROCm 6.3.2 repositories and install GPU drivers
+3. Create a virtual Python environment:
+   ```bash
+   python3.10 -m venv venv
+   source venv/bin/activate
+   pip install --upgrade pip wheel
+   ```
+4. Clone the base repository:
+   ```bash
+   git clone https://github.com/bmaltais/kohya_ss
+   cd kohya_ss
+   ```
+5. Replace the `sd-scripts` folder with the latest from `kohya-ss/sd-scripts`
+
+### 📁 Project Structure
+
+ℹ️ **Folder name = token name**: In this setup, the subfolder name `40_yourtoken` under `kohya_ss/dataset/images/` matches the token string defined in the TOML config file (`token_string = "yourtoken"`). This isn’t required, but it helps keep the dataset structure clear and avoids confusion during training.
+
+```
+kohya_ss/dataset/
+├── images/
+│   └── 40_yourtoken/
+│       ├── img001.png
+│       ├── img001.txt
+│       ├── ...
+├── logs/
+│   └── prompt.txt
+├── model/
+│   └── config_textual_inversion.toml
+├── outputs/
+│   ├── yourtoken_final_000001.safetensors
+│   ├── ...
+│   ├── yourtoken_final.safetensors
+│   └── samples/
+│       ├── 00001.png
+│       ├── 00002.png
+│       └── ...
 ```
 
-- `40_` indicates **repeat count** (40x) — this naming works well and is preserved.
-- `yourtoken` must match both the folder and token string in the config.
-- `train_data_dir` in TOML must point to:  
-  `kohya_ss/dataset/images` **(not the subfolder)**
-
 ---
 
-## 🖋️ Captions
+## 🎨 Dataset and Captions
 
-⚠️ **BLIP doesn’t run on ROCm/AMD**. Captions were manually created using ChatGPT, image-by-image, including NSFW ones, with neutral and clean phrasing optimized for SDXL.
+- **Images** resized to 1024x1536 → this resolution respects SDXL’s minimum of 1024x1024, while offering a more vertical 2:3 aspect ratio, which works better for portraits or full-body renders. Below this threshold, the quality of latent noise deteriorates and SDXL may struggle to capture fine morphological details—especially during Textual Inversion.
+- **⚠️ Important**: In the TOML configuration files, set `train_data_dir = "kohya_ss/dataset/images"` (and **not** `kohya_ss/dataset/images/40_yourdataset`) to ensure that `sdxl_train_textual_inversion.py` correctly scans for subfolders containing your images and captions.
+- **Folder name**: `kohya_ss/dataset/images/40_yourdataset` → the prefix `40` here indicates the repeat count. It’s not mandatory but follows a working convention that Kohya supports reliably.
+- **Captions** are written manually: each caption includes the core token, figure type, style, outfit, background, and lighting cues.
 
-➡️ Results were significantly more accurate and coherent than BLIP or WD14.
+ℹ️ **About Captioning**: BLIP (Bootstrapped Language-Image Pretraining) and WD14 are automated taggers that extract image descriptions using pretrained models. While helpful, they often miss context or produce inconsistent tags — and BLIP doesn’t run on AMD ROCm. To get better results, I asked ChatGPT to manually caption each image (even NSFW ones, strictly for TI training). The result: clean, consistent, and much more precise than what BLIP or WD14 would generate.
 
-### ✏️ Examples:
+#### 📄 Caption Examples:
 
 ```text
-yourtoken, 1girl, slim, medium breasts, floral bikini, tropical background, bust portrait, looking at viewer, blonde wavy hair, tanned skin, sharp shadows, ultra detailed skin, photorealistic
-yourtoken, 1girl, slim, brown sweater, turtleneck, bust portrait, looking at viewer, blonde hair, neutral background, soft studio lighting, ultra detailed skin, photorealistic
-yourtoken, 1girl, nude, slim, medium breasts, upper body, facing camera, soft lighting, ultra detailed skin, photorealistic
+=== kohya_ss/dataset/images/40_yourdataset/img001.txt ===
+yourtoken, 1girl, slim, medium breasts, floral bikini, tropical background, bust portrait, looking at viewer, loose blonde hair, sunny outdoor scene, ultra detailed skin, photorealistic
+
+=== kohya_ss/dataset/images/40_yourdataset/img002.txt ===
+yourtoken, 1girl, brown sweater, turtleneck, bust portrait, looking at viewer, blonde hair, neutral background, soft studio lighting, ultra detailed skin, photorealistic
+
+=== kohya_ss/dataset/images/40_yourdataset/img003.txt ===
+yourtoken, 1girl, red ribbon top, close-up portrait, looking at viewer, melancholic expression, blonde hair tied back, elegant style, ultra detailed skin, photorealistic
 ```
 
----
+## 🛠️ Key Configuration (TOML)
 
-## 🧠 Why 1024×1536 images?
+ℹ️ A TOML file in Kohya allows you to gather all training parameters in a clean, reusable format. It simplifies launching runs without having to type out every argument manually.
 
-- SDXL requires a minimum resolution of **1024×1024**
-- 2:3 vertical ratio improves **portrait and full-body detail**
-- Lower resolutions reduce latent quality and anatomical accuracy in TI
-
----
-
-## ⚙️ Training Config (.toml)
-
-TOML is a configuration file used by `sdxl_train_textual_inversion.py` to launch training. Here are two examples:
-
----
-
-### ✅ Initial training: `config_textual_inversion.toml`
+### ✅ Initial Training Config Example
 
 ```toml
 bucket_no_upscale = true
@@ -99,9 +108,6 @@ learning_rate = 1e-4
 logging_dir = "kohya_ss/dataset/logs"
 loss_type = "l2"
 lr_scheduler = "constant_with_warmup"
-lr_scheduler_args = []
-lr_scheduler_num_cycles = 1
-lr_scheduler_power = 1
 lr_warmup_steps = 500
 max_bucket_reso = 1536
 max_data_loader_n_workers = 0
@@ -115,7 +121,6 @@ multires_noise_discount = 0.3
 no_half_vae = true
 noise_offset_type = "Original"
 num_vectors_per_token = 1
-optimizer_args = []
 optimizer_type = "AdamW"
 output_dir = "/home/user/kohya_ss/dataset/outputs"
 output_name = "yourtoken_final.safetensors"
@@ -136,13 +141,9 @@ train_batch_size = 1
 train_data_dir = "kohya_ss/dataset/images"
 ```
 
----
+### 🔁 Resume Training Config Example
 
-### 🔁 Resume training: `config_resume.toml`
-
-ℹ️ Works only if `save_state = true` was set in the initial run or passed via `--save_state`.
-
-❗ `init_word` must be removed or training will restart from scratch.
+ℹ️ This configuration only works if the initial training was launched with `save_state = true` or `--save_state` in the command line. Also make sure to **remove **`` in the resume TOML or it may restart from scratch and overwrite progress.
 
 ```toml
 bucket_no_upscale = true
@@ -161,9 +162,6 @@ learning_rate = 1e-5
 logging_dir = "kohya_ss/dataset/logs"
 loss_type = "l2"
 lr_scheduler = "constant_with_warmup"
-lr_scheduler_args = []
-lr_scheduler_num_cycles = 1
-lr_scheduler_power = 1
 lr_warmup_steps = 500
 max_bucket_reso = 1536
 max_data_loader_n_workers = 0
@@ -177,7 +175,6 @@ multires_noise_discount = 0.3
 no_half_vae = true
 noise_offset_type = "Original"
 num_vectors_per_token = 1
-optimizer_args = []
 optimizer_type = "AdamW"
 output_dir = "/home/user/kohya_ss/dataset/outputs"
 output_name = "yourtoken_final_refined"
@@ -199,61 +196,50 @@ train_batch_size = 1
 train_data_dir = "kohya_ss/dataset/images"
 ```
 
----
+## 🧪 Sample Verification
 
-## 🧪 Monitor Your Training
+You can use Python to check that your `.safetensors` file is valid and not empty:
 
-Run monitoring with:
+```python
+from safetensors.torch import load_file
+embedding = load_file("yourtoken_final.safetensors")
+print(embedding.keys())  # should show clip_l and clip_g keys
+```
+
+If you see an empty dictionary `{}`, then the embedding failed. Restart with fixed script or from latest checkpoint.
+
+## 📊 Monitoring & TensorBoard
+
+Enable monitoring during training with:
 
 ```bash
 tensorboard --logdir kohya_ss/dataset/logs
 ```
 
-Intermediate samples appear in:
+- View live loss curves and learning rate
+- Samples saved to `outputs/samples/` can be opened manually to verify morph consistency, style adaptation, and convergence
 
-```
-kohya_ss/dataset/outputs/samples/
-```
+## 📌 Reference Paths Summary
 
-💡 These samples are the **only reliable way** to check:
-- prompt conditioning
-- visual consistency
-- overfitting (e.g. skin smearing, repeated faces)
+- `train_data_dir` = `kohya_ss/dataset/images`
+- `output_dir` = `/home/user/kohya_ss/dataset/outputs`
+- `sample_dir` = `/home/user/kohya_ss/dataset/outputs/samples`
+- `prompt.txt` = `/home/user/kohya_ss/dataset/logs/prompt.txt`
+- `resume_from` = `/outputs/yourtoken_final-000002.safetensors`
 
----
+## 🎓 Final Tips
 
-## 🧪 Test the Final Embedding
+This section is aimed at beginners too: it summarizes the key practices to ensure stable and effective training.
 
-```python
-from safetensors.torch import load_file
-x = load_file("yourtoken_final.safetensors")
-print(x.keys())
-```
+- Always **monitor your training** with TensorBoard and review samples
+- The generated samples are the **only reliable way** to track learning progress and detect overfitting
+- Use small `learning_rate` (like 3e-5) for long runs to reduce risk of style overfit
+- Prefer `save_state = true` to enable recovery in case of crash
+- Watch out for resolution mismatches or caption errors — they affect output quality immediately
 
-If the result is `{}`, training failed silently.  
-Check `save_state`, `resume_from`, and always monitor with samples.
-
----
-
-## 📚 Final Advice (For Beginners Too)
-
-- ✅ Use images ≥ 1024x1024 — ideally **1024x1536**
-- ✅ Monitor all intermediate steps
-- ✅ Use `1e-5` or `3e-5` LR for long training (20k+ steps)
-- ❌ Remove `init_word` in resumes
-- ⚠️ Don't point `train_data_dir` directly to the subfolder
+✅ That's it — this setup produces functional SDXL embeddings on AMD ROCm!
 
 ---
 
-## 📌 In Summary
+🖊️ Written and maintained by **Heliox**
 
-- `bmaltais/kohya_ss` is only used as a dependency base
-- `sd-scripts/` must be replaced by the one from `kohya-ss` for SDXL TI
-- The GUI won’t work — but CLI training is fully functional
-
----
-
-## 🖊️ Author
-
-Maintained and tested by **Heliox**.  
-Feel free to share, fork, or improve this setup 🙌
