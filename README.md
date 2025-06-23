@@ -4,7 +4,7 @@ This document is a personal technical logbook designed to serve as both a refere
 
 ---
 
-## ✅ PART 1: WORKING SETUP (START TO FINISH)
+## ✅ WORKING SETUP (START TO FINISH)
 
 ### System Configuration
 
